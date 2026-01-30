@@ -643,3 +643,147 @@ def analisis_multicolinealidad(modelo, plot_corr=True, figsize=(10, 8)):
     print("DIAGNÓSTICO POR VARIABLE (VIF)")
     
     return df_vif
+
+
+def analisis_influencia(modelo, figsize=(15, 10)):
+    """
+    Realiza un análisis de influencia completo indicando el índice original de la observación.
+    
+    Parámetros:
+    -----------
+    modelo : statsmodels result
+        Modelo de regresión ajustado.
+    figsize : tuple
+        Tamaño del lienzo de gráficos.
+        
+    Retorna:
+    --------
+    pd.DataFrame
+        DataFrame filtrado mostrando solo las observaciones influyentes, 
+        su Índice Original y la razón de su influencia.
+    """
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from statsmodels.stats.outliers_influence import OLSInfluence
+    
+    # 1. Extracción de parámetros básicos
+    n = modelo.nobs             
+    p = len(modelo.params)      
+    infl = modelo.get_influence()
+    
+    # --- NOVEDAD: Recuperamos el índice original del DataFrame de entrenamiento ---
+    # Esto permite identificar la fila real (ej. ID cliente, Fecha, etc.)
+    idx_original = modelo.model.data.row_labels
+    
+    # 2. Definición de Umbrales
+    th_cook = 1.0
+    th_dfbetas = 2.0 / np.sqrt(n)
+    th_dffits = 2.0 * np.sqrt(p / n)
+    th_cov_upper = 1.0 + (3.0 * p / n)
+    th_cov_lower = 1.0 - (3.0 * p / n)
+    
+    # 3. Obtención de métricas
+    cooks_d, _ = infl.cooks_distance
+    dfbetas = infl.dfbetas
+    dfbetas_names = modelo.model.exog_names
+    max_dfbetas_val = np.max(np.abs(dfbetas), axis=1)
+    dffits, _ = infl.dffits
+    covratio = infl.cov_ratio
+    
+    # 4. Construcción del DataFrame de Resultados
+    # Incluimos 'Index_Original' como primera columna
+    df_res = pd.DataFrame({
+        'Index_Original': idx_original, 
+        'Cook_D': cooks_d,
+        'DFFITS': dffits,
+        'COVRATIO': covratio,
+        'Max_Abs_DFBETA': max_dfbetas_val
+    })
+    
+    # 5. Lógica de Detección de Influencia
+    razones = []
+    es_influyente = []
+    
+    for i in df_res.index:
+        motivos = []
+        
+        # Criterio Cook
+        if df_res.loc[i, 'Cook_D'] > th_cook:
+            motivos.append(f"Cook > 1")
+            
+        # Criterio DFFITS
+        if np.abs(df_res.loc[i, 'DFFITS']) > th_dffits:
+            motivos.append(f"|DFFITS| > {th_dffits:.2f}")
+            
+        # Criterio COVRATIO
+        val_cov = df_res.loc[i, 'COVRATIO']
+        if (val_cov > th_cov_upper) or (val_cov < th_cov_lower):
+            motivos.append(f"COVRATIO fuera rango ({th_cov_lower:.2f}, {th_cov_upper:.2f})")
+            
+        # Criterio DFBETAS
+        if df_res.loc[i, 'Max_Abs_DFBETA'] > th_dfbetas:
+            # Buscamos qué variables específicas fallan
+            row_dfbetas = dfbetas[i, :]
+            vars_afectadas = [dfbetas_names[j] for j, val in enumerate(row_dfbetas) if abs(val) > th_dfbetas]
+            motivos.append(f"DFBETAS > {th_dfbetas:.2f} en: {vars_afectadas}")
+            
+        # Consolidación
+        if len(motivos) > 0:
+            es_influyente.append(True)
+            razones.append(" | ".join(motivos))
+        else:
+            es_influyente.append(False)
+            razones.append("Normal")
+            
+    df_res['Es_Influyente'] = es_influyente
+    df_res['Diagnóstico'] = razones
+    
+    # Filtramos y reordenamos columnas
+    df_relevantes = df_res[df_res['Es_Influyente']].copy()
+    df_relevantes = df_relevantes[['Index_Original', 'Diagnóstico', 'Cook_D', 'DFFITS', 'COVRATIO', 'Max_Abs_DFBETA']]
+    
+    # ==============================================================================
+    # 6. GENERACIÓN DE GRÁFICOS (LIENZO)
+    # ==============================================================================
+    # Nota: En los gráficos usamos el índice posicional (0, 1, 2...) en el eje X para
+    # mantener la legibilidad, pero el usuario puede buscar el punto en la tabla.
+    
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle(f'Análisis de Influencia (n={n}, p={p})', fontsize=16)
+    
+    indices_posicionales = range(len(df_res)) # 0 a n-1
+
+    # GRÁFICO 1: Distancia de Cook
+    axes[0, 0].vlines(indices_posicionales, 0, cooks_d, color='gray', alpha=0.7)
+    axes[0, 0].scatter(indices_posicionales, cooks_d, alpha=0.7)
+    axes[0, 0].axhline(y=th_cook, color='r', linestyle='--', label='Umbral = 1')
+    axes[0, 0].set_title("Distancia de Cook")
+    axes[0, 0].set_ylabel("Cook's D")
+
+    # GRÁFICO 2: DFFITS
+    axes[0, 1].scatter(indices_posicionales, dffits, alpha=0.7)
+    axes[0, 1].axhline(y=th_dffits, color='r', linestyle='--', label=f'+/- {th_dffits:.2f}')
+    axes[0, 1].axhline(y=-th_dffits, color='r', linestyle='--')
+    axes[0, 1].set_title("DFFITS")
+    axes[0, 1].set_ylabel("DFFITS")
+
+    # GRÁFICO 3: COVRATIO
+    axes[1, 0].scatter(indices_posicionales, covratio, alpha=0.7)
+    axes[1, 0].axhline(y=1, color='k', alpha=0.3)
+    axes[1, 0].axhline(y=th_cov_upper, color='r', linestyle='--', label=f'Lim {th_cov_upper:.2f}')
+    axes[1, 0].axhline(y=th_cov_lower, color='r', linestyle='--', label=f'Lim {th_cov_lower:.2f}')
+    axes[1, 0].set_title("COVRATIO")
+    axes[1, 0].set_ylabel("CovRatio")
+
+    # GRÁFICO 4: DFBETAS
+    axes[1, 1].scatter(indices_posicionales, max_dfbetas_val, alpha=0.7, color='green')
+    axes[1, 1].axhline(y=th_dfbetas, color='r', linestyle='--', label=f'Umbral {th_dfbetas:.2f}')
+    axes[1, 1].set_title("Max |DFBETAS|")
+    axes[1, 1].set_ylabel("Max DFBETA")
+
+    plt.tight_layout()
+    plt.show()
+    
+    return df_relevantes
