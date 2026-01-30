@@ -333,3 +333,174 @@ def influence_covratio(modelo,infl_val):
   print(np.where(influential)[0])
 
   return np.where(influential)[0]
+
+
+def diagnostico_modelo_regresion(modelo, alpha=0.05, figsize=(15, 10)):
+    """
+    Realiza un diagnóstico completo de un modelo de regresión lineal (statsmodels).
+    
+    Parámetros:
+    -----------
+    modelo : result object de statsmodels (ej. resultado de sm.OLS(...).fit())
+    alpha : float, nivel de significancia para los tests (default 0.05)
+    figsize : tuple, tamaño de la figura para los gráficos.
+    
+    Retorna:
+    --------
+    df_resultados : pd.DataFrame con los estadísticos de los tests y su interpretación.
+    """
+    
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import statsmodels.api as sm
+    from scipy import stats
+    from statsmodels.stats.stattools import durbin_watson
+    import statsmodels.stats.api as sms
+
+    # 1. Extracción de datos del modelo
+    fitted_vals = modelo.fittedvalues
+    residuos = modelo.resid
+    # Estandarización de residuos (residuo / raiz(MSE))
+    dt_resid = np.sqrt(modelo.mse_resid)
+    residuos_std = residuos / dt_resid
+    
+    # Obtenemos la variable dependiente (Target) real
+    # En statsmodels OLS, model.endog es el target (Y)
+    y_real = modelo.model.endog
+    
+    # DataFrame auxiliar para gráficos
+    df_diag = pd.DataFrame({
+        'Real': y_real,
+        'Prediccion': fitted_vals,
+        'Residuos': residuos,
+        'Residuos_Std': residuos_std
+    })
+
+    # ==============================================================================
+    # 2. GENERACIÓN DE GRÁFICOS
+    # ==============================================================================
+    fig, axes = plt.subplots(nrows=2, ncols=3, figsize=figsize)
+    fig.suptitle('Diagnóstico de Residuos del Modelo', fontsize=16)
+
+    # Gráfico 1: Predicción vs Real (Linealidad)
+    sns.regplot(x=df_diag['Prediccion'], y=df_diag['Real'],
+                scatter=True, ci=None, line_kws={'color': 'red'}, ax=axes[0,0])
+    axes[0,0].set_title('Linealidad: Predicción vs Real')
+    axes[0,0].set_xlabel('Valores Predichos')
+    axes[0,0].set_ylabel('Valores Reales')
+
+    # Gráfico 2: Predicción vs Residuos (Homocedasticidad)
+    sns.regplot(x=df_diag['Prediccion'], y=df_diag['Residuos_Std'],
+                scatter=True, ci=None, line_kws={'color': 'red'}, ax=axes[0,1])
+    axes[0,1].axhline(y=0, color='black', linestyle='--')
+    axes[0,1].set_title('Homocedasticidad: Predichos vs Residuos Std')
+    axes[0,1].set_xlabel('Valores Predichos')
+    axes[0,1].set_ylabel('Residuos Estandarizados')
+
+    # Gráfico 3: Histograma de Residuos (Normalidad)
+    sns.histplot(df_diag['Residuos_Std'], kde=True, stat="density", ax=axes[0,2])
+    axes[0,2].set_title('Normalidad: Histograma de Residuos')
+
+    # Gráfico 4: Q-Q Plot (Normalidad)
+    sm.qqplot(residuos_std, line='45', fit=True, ax=axes[1,0])
+    axes[1,0].set_title('Normalidad: Q-Q Plot')
+
+    # Gráfico 5: Autocorrelación (ACF)
+    sm.graphics.tsa.plot_acf(residuos, lags=min(20, len(residuos)//2 - 1), ax=axes[1,1])
+    axes[1,1].set_title('Independencia: Autocorrelación')
+
+    # Borramos el 6to gráfico vacío para limpieza visual
+    fig.delaxes(axes[1,2])
+    
+    plt.tight_layout()
+    plt.show()
+
+    # ==============================================================================
+    # 3. TESTS ESTADÍSTICOS
+    # ==============================================================================
+    resultados = []
+
+    # A) Test de Shapiro-Wilk (Normalidad)
+    # H0: Los residuos siguen una distribución normal
+    stat_sw, p_val_sw = stats.shapiro(residuos)
+    cumple_sw = p_val_sw > alpha
+    resultados.append({
+        'Test': 'Shapiro-Wilk (Normalidad)',
+        'Hipótesis Nula (H0)': 'Residuos Normales',
+        'Estadístico': stat_sw,
+        'P-Valor': p_val_sw,
+        'Cumple Hipótesis': 'Sí' if cumple_sw else 'No'
+    })
+
+    # B) Test de Breusch-Pagan (Homocedasticidad)
+    # H0: La varianza de los errores es constante (Homocedasticidad)
+    # Necesitamos la matriz de diseño (exog)
+    exog = modelo.model.exog
+    try:
+        test_bp = sms.het_breuschpagan(residuos, exog)
+        # El output es: (lm, lm_pvalue, fvalue, f_pvalue). Usamos lm_pvalue [1]
+        p_val_bp = test_bp[1]
+        cumple_bp = p_val_bp > alpha
+        resultados.append({
+            'Test': 'Breusch-Pagan (Homocedasticidad)',
+            'Hipótesis Nula (H0)': 'Varianza Constante',
+            'Estadístico': test_bp[0],
+            'P-Valor': p_val_bp,
+            'Cumple Hipótesis': 'Sí' if cumple_bp else 'No'
+        })
+    except Exception as e:
+        # En casos simples univariantes a veces da error de dimensiones si no se maneja bien exog
+        resultados.append({'Test': 'Breusch-Pagan', 'Resultado': 'Error en cálculo'})
+        cumple_bp = False
+
+    # C) Test de Durbin-Watson (Independencia / Autocorrelación)
+    # H0: No hay autocorrelación de primer orden
+    # Rango: 0 a 4. 2 es no correlación.
+    # Regla general: 1.5 < DW < 2.5 se considera aceptable (independencia).
+    stat_dw = durbin_watson(residuos)
+    # No devuelve p-valor directo, usamos regla heurística
+    cumple_dw = 1.5 <= stat_dw <= 2.5
+    resultados.append({
+        'Test': 'Durbin-Watson (Independencia)',
+        'Hipótesis Nula (H0)': 'No Autocorrelación (stat ~ 2)',
+        'Estadístico': stat_dw,
+        'P-Valor': np.nan, # No aplica p-valor estándar
+        'Cumple Hipótesis': 'Sí' if cumple_dw else 'No'
+    })
+
+    df_resultados = pd.DataFrame(resultados)
+    
+    # ==============================================================================
+    # 4. COMENTARIOS Y CONCLUSIONES
+    # ==============================================================================
+    print("\n" + "="*50)
+    print("CONCLUSIONES DEL DIAGNÓSTICO")
+    print("="*50)
+    
+    # Comentario Normalidad
+    if cumple_sw:
+        print(f"[OK] Normalidad: Los residuos parecen seguir una distribución normal (p={p_val_sw:.4f} > {alpha}).")
+    else:
+        print(f"[X] Normalidad: Se rechaza la hipótesis de normalidad (p={p_val_sw:.4f} < {alpha}).")
+    
+    # Comentario Homocedasticidad
+    if cumple_bp:
+        print(f"[OK] Homocedasticidad: La varianza de los errores es constante (p={p_val_bp:.4f} > {alpha}).")
+    else:
+        print(f"[X] Homocedasticidad: Existen indicios de heterocedasticidad (varianza no constante).")
+        
+    # Comentario Independencia
+    if cumple_dw:
+        print(f"[OK] Independencia: No parece haber autocorrelación severa (DW={stat_dw:.2f} está entre 1.5 y 2.5).")
+    else:
+        if stat_dw < 1.5:
+            tipo = "positiva"
+        else:
+            tipo = "negativa"
+        print(f"[X] Independencia: Posible autocorrelación {tipo} de los residuos (DW={stat_dw:.2f}).")
+        
+    print("="*50 + "\n")
+
+    return df_resultados
