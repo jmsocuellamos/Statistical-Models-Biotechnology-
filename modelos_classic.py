@@ -47,6 +47,7 @@ def forward_selection(
         Lista con las variables seleccionadas.
     """
     import statsmodels.api as sm
+    import statsmodels.formula.api as smf
     if add_constant:
         X = sm.add_constant(X, prepend=True).rename(columns={'const':'intercept'})
 
@@ -123,6 +124,7 @@ def backward_selection(
         Lista con las variables seleccionadas.
     """
     import statsmodels.api as sm
+    import statsmodels.formula.api as smf
     if add_constant:
         X = sm.add_constant(X, prepend=True).rename(columns={'const':'intercept'})
 
