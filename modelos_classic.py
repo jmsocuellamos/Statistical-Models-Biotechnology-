@@ -975,3 +975,152 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     df_resultados = pd.DataFrame(resultados_tests)
     
     return df_resultados
+
+def prediccion_anova(modelo, func=None, figsize=(12, 5)):
+    """
+    Realiza predicciones y gráficos de intervalos de confianza para modelos ANOVA.
+    Permite aplicar una función de transformación a las predicciones (útil para 
+    invertir transformaciones realizadas durante el ajuste: log, sqrt, etc.).
+
+    Parámetros:
+    -----------
+    modelo : statsmodels result
+        El modelo ajustado.
+    func : str o callable, opcional (Default: None)
+        Función para transformar la predicción (ej. para volver a la escala original).
+        - Strings admitidos: 
+            'exp' (exponencial, inversa del log), 
+            'log' (logaritmo), 
+            'sqrt' (raíz cuadrada), 
+            'sq' (cuadrado, inversa de la raíz), 
+            'inverse' (1/x).
+        - Callable: Una función personalizada (ej. lambda x: x**3).
+    figsize : tuple
+        Tamaño de la figura.
+
+    Retorna:
+    --------
+    pd.DataFrame
+        DataFrame con las predicciones en escala del modelo y escala transformada.
+    """
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import itertools
+    import re
+
+    # 1. DICCIONARIO DE FUNCIONES COMUNES
+    # -----------------------------------
+    mapa_funciones = {
+        'exp': np.exp,
+        'log': np.log,
+        'sqrt': np.sqrt,
+        'sq': np.square,
+        'square': np.square,
+        'inverse': lambda x: 1/x,
+        'inv': lambda x: 1/x
+    }
+
+    # 2. INTROSPECCIÓN DEL MODELO
+    # ---------------------------
+    terminos = modelo.model.data.design_info.term_names
+    vars_predictoras = set()
+    
+    for term in terminos:
+        if term == 'Intercept': continue
+        partes = term.split(':')
+        for p in partes:
+            match = re.search(r"C\((.*?)\)", p)
+            if match:
+                vars_predictoras.add(match.group(1))
+            else:
+                vars_predictoras.add(p)
+    
+    factores = list(vars_predictoras)
+    df_orig = modelo.model.data.frame
+    
+    if len(factores) == 0:
+        raise ValueError("No se detectaron factores en el modelo.")
+
+    # 3. GENERACIÓN DE LA REJILLA DE PREDICCIÓN
+    # -----------------------------------------
+    niveles = [df_orig[f].unique() for f in factores]
+    combinaciones = list(itertools.product(*niveles))
+    df_pred = pd.DataFrame(combinaciones, columns=factores)
+    
+    # 4. PREDICCIÓN (Escala del modelo)
+    # ---------------------------------
+    pred_obj = modelo.get_prediction(df_pred)
+    resumen = pred_obj.summary_frame(alpha=0.05)
+    
+    cols_interes = ['mean', 'mean_ci_lower', 'mean_ci_upper']
+    df_resultado = pd.concat([df_pred, resumen[cols_interes]], axis=1)
+
+    # 5. APLICACIÓN DE LA FUNCIÓN (func)
+    # ----------------------------------
+    funcion_aplicar = None
+    nombre_trans = "Transformada"
+
+    if func is not None:
+        if isinstance(func, str):
+            if func.lower() in mapa_funciones:
+                funcion_aplicar = mapa_funciones[func.lower()]
+                nombre_trans = func.capitalize()
+            else:
+                raise ValueError(f"La función '{func}' no está predefinida. Use: {list(mapa_funciones.keys())}")
+        elif callable(func):
+            funcion_aplicar = func
+            nombre_trans = "Custom"
+        else:
+            raise TypeError("El parámetro 'func' debe ser un string o una función.")
+
+        # Aplicar transformación
+        df_resultado['mean_trans'] = funcion_aplicar(df_resultado['mean'])
+        df_resultado['ci_lower_trans'] = funcion_aplicar(df_resultado['mean_ci_lower'])
+        df_resultado['ci_upper_trans'] = funcion_aplicar(df_resultado['mean_ci_upper'])
+
+    # 6. GENERACIÓN DE GRÁFICOS
+    # -------------------------
+    ncols = 2 if funcion_aplicar else 1
+    fig, ax = plt.subplots(nrows=1, ncols=ncols, figsize=figsize)
+    if ncols == 1: ax = [ax]
+
+    # --- Helper para plotear ---
+    def plot_intervals(axis, data, x_col, y_col, y_min, y_max, hue_col, title):
+        if hue_col:
+            sns.scatterplot(data=data, x=x_col, y=y_col, hue=hue_col, s=100, ax=axis)
+            niveles_hue = data[hue_col].unique()
+            palette = sns.color_palette(n_colors=len(niveles_hue))
+            
+            for i, nivel in enumerate(niveles_hue):
+                subset = data[data[hue_col] == nivel]
+                color = palette[i]
+                axis.vlines(x=subset[x_col], ymin=subset[y_min], ymax=subset[y_max], color=color)
+                axis.plot(subset[x_col], subset[y_min], '_', color=color, markersize=10, markeredgewidth=2)
+                axis.plot(subset[x_col], subset[y_max], '_', color=color, markersize=10, markeredgewidth=2)
+        else:
+            axis.plot(data[x_col], data[y_col], 'p', markersize=8, color='steelblue')
+            axis.vlines(x=data[x_col], ymin=data[y_min], ymax=data[y_max], color='steelblue')
+            axis.plot(data[x_col], data[y_min], '_', color='steelblue', markersize=10, markeredgewidth=2)
+            axis.plot(data[x_col], data[y_max], '_', color='steelblue', markersize=10, markeredgewidth=2)
+            axis.set_xlabel(x_col)
+
+        axis.set_title(title)
+        axis.set_ylabel("Respuesta")
+        axis.grid(True, alpha=0.3)
+
+    x_var = factores[0]
+    hue_var = factores[1] if len(factores) > 1 else None
+
+    # Plot 1: Escala Modelo
+    plot_intervals(ax[0], df_resultado, x_var, 'mean', 'mean_ci_lower', 'mean_ci_upper', hue_var, "Predicción (Escala Modelo)")
+
+    # Plot 2: Escala Transformada (si existe)
+    if funcion_aplicar:
+        plot_intervals(ax[1], df_resultado, x_var, 'mean_trans', 'ci_lower_trans', 'ci_upper_trans', hue_var, f"Predicción ({nombre_trans})")
+
+    plt.tight_layout()
+    plt.show()
+
+    return df_resultado
