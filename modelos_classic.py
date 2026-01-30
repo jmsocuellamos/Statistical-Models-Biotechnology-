@@ -787,3 +787,155 @@ def analisis_influencia(modelo, figsize=(15, 10)):
     plt.show()
     
     return df_relevantes
+
+def diagnostico_anova(modelo, figsize=(14, 10)):
+    """
+    Realiza el diagnóstico completo de un modelo ANOVA extrayendo automáticamente
+    los datos y nombres de variables del propio objeto del modelo.
+    
+    Parámetros:
+    -----------
+    modelo : statsmodels result
+        Modelo ajustado (ej. sm.OLS.from_formula(...).fit()).
+    figsize : tuple
+        Tamaño de la figura.
+        
+    Retorna:
+    --------
+    pd.DataFrame
+        Tabla con los resultados de los tests de hipótesis (Levene y Shapiro-Wilk).
+    """
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import statsmodels.api as sm
+    from scipy import stats
+    from statsmodels.stats.outliers_influence import OLSInfluence
+    import re
+    
+    # ==============================================================================
+    # 1. AUTO-DETECCIÓN DE VARIABLES Y DATOS
+    # ==============================================================================
+    try:
+        # Recuperamos el DataFrame original usado en el ajuste
+        df = modelo.model.data.frame.copy()
+        
+        # 1. Identificar Variable Respuesta (Y)
+        col_response = modelo.model.endog_names
+        
+        # 2. Identificar Factor (X)
+        terminos = modelo.model.data.design_info.term_names
+        factors = [t for t in terminos if t != 'Intercept']
+        
+        if len(factors) == 0:
+            raise ValueError("No se encontró ningún factor predictor en el modelo.")
+        
+        raw_factor = factors[0] 
+        
+        # Limpieza: Si la fórmula usó 'C(spray)', extraemos solo 'spray'
+        match = re.search(r"C\((.*?)\)", raw_factor)
+        if match:
+            col_factor = match.group(1)
+        else:
+            col_factor = raw_factor
+            
+        print(f"Diagnóstico automático para: {col_response} ~ {col_factor}")
+        print("-" * 60)
+
+    except AttributeError:
+        raise ValueError("El modelo no contiene metadatos suficientes. "
+                         "Asegúrate de haber usado la API de fórmulas (sm.ols(formula=..., data=...)).")
+
+    # ==============================================================================
+    # 2. PREPARACIÓN DE DATOS DIAGNÓSTICOS
+    # ==============================================================================
+    prediccion = modelo.fittedvalues
+    dt_resid = np.sqrt(modelo.mse_resid)
+    residuos_std = modelo.resid / dt_resid
+    
+    indices_modelo = modelo.model.data.row_labels
+    df_diag = df.loc[indices_modelo].copy()
+    
+    df_diag['Prediccion'] = prediccion
+    df_diag['Residuos_Std'] = residuos_std
+    df_diag['Residuos'] = modelo.resid 
+    
+    grupos = df_diag[col_factor].unique()
+    
+    # ==============================================================================
+    # 3. GENERACIÓN DE GRÁFICOS (LIENZO)
+    # ==============================================================================
+    fig, axes = plt.subplots(2, 2, figsize=figsize)
+    fig.suptitle(f'Diagnóstico ANOVA: {col_response} ~ {col_factor}', fontsize=16)
+    
+    # A) Homogeneidad de Varianzas (Boxplot)
+    sns.boxplot(
+        data=df_diag, 
+        x=col_factor, 
+        y='Residuos_Std', 
+        hue=col_factor,     
+        legend=False,       
+        palette="Blues", 
+        ax=axes[0,0]
+    )
+    axes[0,0].axhline(y=0, color='red', linestyle='--')
+    axes[0,0].set_title('Homogeneidad: Residuos por Grupo')
+    axes[0,0].set_ylabel('Residuos Estandarizados')
+    
+    # B) Normalidad Global (QQ Plot)
+    sm.qqplot(df_diag['Residuos_Std'], line='45', fit=True, ax=axes[0,1])
+    axes[0,1].set_title('Normalidad Global: Q-Q Plot')
+    
+    # C) Distancia de Cook
+    infl = OLSInfluence(modelo)
+    (c, p) = infl.cooks_distance
+    axes[1,0].stem(np.arange(len(c)), c, markerfmt=",")
+    axes[1,0].set_title('Puntos Influyentes: Distancia de Cook')
+    axes[1,0].set_ylabel('Distancia Cook')
+    axes[1,0].axhline(y=1, color='r', linestyle='--', alpha=0.5, label='Umbral (1.0)')
+    axes[1,0].legend()
+
+    # D) Histograma Global
+    sns.histplot(df_diag['Residuos_Std'], kde=True, stat="density", ax=axes[1,1])
+    axes[1,1].set_title('Distribución de Residuos Global')
+    
+    plt.tight_layout()
+    plt.show()
+    
+    # ==============================================================================
+    # 4. TESTS ESTADÍSTICOS
+    # ==============================================================================
+    resultados_tests = []
+    
+    # Test de Levene (Homocedasticidad)
+    lista_residuos_grupos = [df_diag[df_diag[col_factor] == g]['Residuos'] for g in grupos]
+    stat_levene, p_levene = stats.levene(*lista_residuos_grupos, center='median')
+    
+    resultados_tests.append({
+        'Test': 'Levene (Homocedasticidad)',
+        'Ámbito': 'Global (Entre grupos)',
+        'P-Valor': round(p_levene, 4),
+        'Conclusión': 'Varianzas Iguales (H0)' if p_levene > 0.05 else 'Varianzas Diferentes (H1)'
+    })
+    
+    # Test de Shapiro-Wilk (Normalidad por grupos)
+    for g in grupos:
+        datos_grupo = df_diag[df_diag[col_factor] == g]['Residuos']
+        if len(datos_grupo) >= 3:
+            stat_sw, p_sw = stats.shapiro(datos_grupo)
+            concl = 'Normal (H0)' if p_sw > 0.05 else 'No Normal (H1)'
+        else:
+            p_sw = np.nan
+            concl = "N<3 (Insuficiente)"
+
+        resultados_tests.append({
+            'Test': 'Shapiro-Wilk (Normalidad)',
+            'Ámbito': f'Grupo: {g}',
+            'P-Valor': round(p_sw, 4) if not np.isnan(p_sw) else "-",
+            'Conclusión': concl
+        })
+        
+    df_resultados = pd.DataFrame(resultados_tests)
+    
+    return df_resultados
