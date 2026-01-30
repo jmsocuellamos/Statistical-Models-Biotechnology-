@@ -504,3 +504,142 @@ def diagnostico_modelo_regresion(modelo, alpha=0.05, figsize=(15, 10)):
     print("="*50 + "\n")
 
     return df_resultados
+
+def analisis_multicolinealidad(modelo, plot_corr=True, figsize=(10, 8)):
+    """
+    Realiza un diagnóstico de multicolinealidad basado en VIF y Número de Condición.
+    
+    Parámetros:
+    -----------
+    modelo : result object de statsmodels 
+        Modelo de regresión lineal ya ajustado.
+    plot_corr : bool
+        Si True, genera un mapa de calor de correlaciones entre predictores.
+    figsize : tuple
+        Tamaño de la figura para el gráfico.
+        
+    Retorna:
+    --------
+    df_vif : pd.DataFrame
+        Tabla con los valores VIF por variable y su interpretación.
+    dict_global : dict
+        Diccionario con el Número de Condición y su diagnóstico.
+    """
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from statsmodels.stats.outliers_influence import variance_inflation_factor
+    
+    # ==============================================================================
+    # 1. EXTRACCIÓN DE DATOS
+    # ==============================================================================
+    # Matriz de diseño (Variables Explicativas)
+    X = modelo.model.exog
+    nombres_variables = modelo.model.exog_names
+    
+    # R^2 del modelo global (para el criterio comparativo)
+    r2_modelo = modelo.rsquared
+    
+    # Umbral dinámico: 1 / (1 - R^2_modelo)
+    # Si R^2 es 1, evitamos división por cero
+    if r2_modelo < 1:
+        vif_umbral_modelo = 1 / (1 - r2_modelo)
+    else:
+        vif_umbral_modelo = np.inf
+    
+    # ==============================================================================
+    # 2. CÁLCULO DE VIF (Nivel Variable)
+    # ==============================================================================
+    datos_vif = []
+    
+    for i in range(X.shape[1]):
+        # Calculamos VIF para la variable i
+        vif_i = variance_inflation_factor(X, i)
+        var_name = nombres_variables[i]
+        
+        # INTERPRETACIÓN SEGÚN TUS REGLAS
+        # -------------------------------
+        problemas = []
+        
+        # Criterio 1: VIF > 10
+        es_alto = vif_i > 10
+        if es_alto:
+            problemas.append("VIF > 10")
+            
+        # Criterio 2: VIF > 1/(1-R^2_modelo)
+        # Implica que la relación entre X's es mayor que entre X y Y
+        es_mayor_modelo = vif_i > vif_umbral_modelo
+        if es_mayor_modelo:
+            problemas.append("VIF > 1/(1-R²)")
+            
+        # Conclusión
+        if len(problemas) > 0:
+            conclusion = f"Multicolinealidad ({' y '.join(problemas)})"
+        else:
+            conclusion = "Sin problemas evidentes"
+            
+        datos_vif.append({
+            'Variable': var_name,
+            'VIF': round(vif_i, 4),
+            'Umbral Modelo (1/(1-R²))': round(vif_umbral_modelo, 4),
+            '¿VIF > 10?': 'SÍ' if es_alto else 'No',
+            '¿VIF > Umbral Modelo?': 'SÍ' if es_mayor_modelo else 'No',
+            'Diagnóstico': conclusion
+        })
+    
+    df_vif = pd.DataFrame(datos_vif)
+    
+    # ==============================================================================
+    # 3. CÁLCULO DE NÚMERO DE CONDICIÓN (Nivel Global)
+    # ==============================================================================
+    # kappa = lambda_max / lambda_min
+    cond_number = np.linalg.cond(X)
+    
+    # INTERPRETACIÓN SEGÚN TUS REGLAS
+    # -------------------------------
+    if cond_number < 100:
+        diag_cond = "No hay problemas de multicolinealidad"
+        severidad = "Ninguna"
+    elif 100 <= cond_number < 1000:
+        diag_cond = "Multicolinealidad MODERADA"
+        severidad = "Moderada"
+    else: # cond_number >= 1000
+        diag_cond = "Multicolinealidad SEVERA"
+        severidad = "Severa"
+
+    # ==============================================================================
+    # 4. VISUALIZACIÓN (Matriz de Correlación)
+    # ==============================================================================
+    if plot_corr:
+        # Convertimos exog a DataFrame para facilitar el ploteo (excluyendo constante si es 1)
+        df_X = pd.DataFrame(X, columns=nombres_variables)
+        
+        # Si existe la constante (intercepto), a veces se quita del heatmap por no aportar correlación
+        if 'const' in df_X.columns and df_X['const'].nunique() == 1:
+             df_X = df_X.drop(columns=['const'])
+        
+        plt.figure(figsize=figsize)
+        # Mapa de calor de correlaciones absolutas (para ver intensidad)
+        corr_matrix = df_X.corr()
+        mask = np.triu(np.ones_like(corr_matrix, dtype=bool))
+        
+        sns.heatmap(corr_matrix, mask=mask, annot=True, fmt=".2f", cmap='coolwarm', 
+                    vmin=-1, vmax=1, center=0, square=True, linewidths=.5)
+        plt.title('Matriz de Correlación entre Variables Explicativas')
+        
+        plt.show()
+
+    # ==============================================================================
+    # 5. SALIDA DE RESULTADOS
+    # ==============================================================================
+    print("-" * 60)
+    print("DIAGNÓSTICO GLOBAL (NÚMERO DE CONDICIÓN)")
+    print("-" * 60)
+    print(f"Número de Condición (κ): {cond_number:,.2f}")
+    print(f"Diagnóstico: {diag_cond}")
+    print("-" * 60 + "\n")
+    
+    print("DIAGNÓSTICO POR VARIABLE (VIF)")
+    
+    return df_vif
