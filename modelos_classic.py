@@ -166,7 +166,37 @@ def backward_selection(
             print(f'variables: {seleccion} | {criterio}: {mejor_metrica:.3f}')
 
     return sorted(seleccion)
-    
+
+
+
+# Función para comparar y seleccionar el mejor modelo de los proporcionados
+# en 'mod', con la métrica AIC o BIC
+def anova_selection(mod, metrica, datos):
+    """
+    Evalúa la métrica considerada para un conjunto de modelos.
+
+    Parameters
+    ----------
+    mod: lista
+    metrica: str
+        Métrica utilizada para seleccionar el modelo. Debe ser una de las
+        siguientes opciones: 'aic', 'bic'.
+    datos: pdDataFrame
+        Conjunto de datos sobre los que evaluar los modelos
+
+    Returns
+    -------
+    modelo: list
+        modelo con el mejor valor de la métrica.
+    """
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+    valores = []
+    for i in range(len(mod)):
+        ajuste = smf.ols(mod[i], data = datos).fit()
+        valores.append(round(getattr(ajuste, metrica),4))
+        pos = valores.index(min(valores))
+    return mod[pos]
 
 # Funciones para el análisis de influencia
 
