@@ -790,8 +790,10 @@ def analisis_influencia(modelo, figsize=(15, 10)):
 
 def diagnostico_anova(modelo, figsize=(14, 10)):
     """
-    Realiza el diagnóstico completo de un modelo ANOVA extrayendo automáticamente
-    los datos y nombres de variables del propio objeto del modelo.
+    Realiza el diagnóstico completo de un modelo ANOVA (simple o factorial).
+    
+    Detecta automáticamente múltiples factores e interacciones y agrupa los
+    residuos por la combinación de niveles presentes en el diseño.
     
     Parámetros:
     -----------
@@ -803,7 +805,8 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     Retorna:
     --------
     pd.DataFrame
-        Tabla con los resultados de los tests de hipótesis (Levene y Shapiro-Wilk).
+        Tabla con los resultados de los tests de hipótesis (Levene y Shapiro-Wilk)
+        desglosados por combinación de factores.
     """
     import pandas as pd
     import numpy as np
@@ -813,42 +816,61 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     from scipy import stats
     from statsmodels.stats.outliers_influence import OLSInfluence
     import re
-    
+
+
     # ==============================================================================
-    # 1. AUTO-DETECCIÓN DE VARIABLES Y DATOS
+    # 1. AUTO-DETECCIÓN DE VARIABLES Y CONSTRUCCIÓN DE GRUPOS
     # ==============================================================================
     try:
         # Recuperamos el DataFrame original usado en el ajuste
         df = modelo.model.data.frame.copy()
-        
-        # 1. Identificar Variable Respuesta (Y)
         col_response = modelo.model.endog_names
         
-        # 2. Identificar Factor (X)
+        # Obtenemos los términos del modelo (ej: ['Intercept', 'C(f1)', 'C(f2)', 'C(f1):C(f2)'])
         terminos = modelo.model.data.design_info.term_names
-        factors = [t for t in terminos if t != 'Intercept']
         
-        if len(factors) == 0:
-            raise ValueError("No se encontró ningún factor predictor en el modelo.")
-        
-        raw_factor = factors[0] 
-        
-        # Limpieza: Si la fórmula usó 'C(spray)', extraemos solo 'spray'
-        match = re.search(r"C\((.*?)\)", raw_factor)
-        if match:
-            col_factor = match.group(1)
-        else:
-            col_factor = raw_factor
+        # Filtramos 'Intercept' y extraemos los nombres limpios de las columnas
+        vars_predictoras = set()
+        for term in terminos:
+            if term == 'Intercept':
+                continue
             
-        print(f"Diagnóstico automático para: {col_response} ~ {col_factor}")
+            # Separamos interacciones (ej: "A:B" -> ["A", "B"])
+            partes = term.split(':')
+            
+            for p in partes:
+                # Limpieza: Si la fórmula usó 'C(variable)', extraemos solo 'variable'
+                match = re.search(r"C\((.*?)\)", p)
+                if match:
+                    vars_predictoras.add(match.group(1))
+                else:
+                    vars_predictoras.add(p)
+        
+        cols_factores = list(vars_predictoras)
+        
+        if not cols_factores:
+            raise ValueError("No se encontraron factores en el modelo.")
+            
+        # --- CREACIÓN DE LA VARIABLE DE AGRUPACIÓN COMBINADA ---
+        # Si hay factores ['Spray', 'Temp'], crea grupos tipo "A - High", "A - Low"...
+        # Esto captura la celda del diseño experimental.
+        if len(cols_factores) > 1:
+            df['Grupo_Comb'] = df[cols_factores].astype(str).agg(' & '.join, axis=1)
+            nombre_factor_eje = f"Combinación: {' & '.join(cols_factores)}"
+        else:
+            df['Grupo_Comb'] = df[cols_factores[0]].astype(str)
+            nombre_factor_eje = cols_factores[0]
+            
+        print(f"Diagnóstico automático para: {col_response}")
+        print(f"Factores detectados: {cols_factores}")
+        print(f"Agrupación por: {nombre_factor_eje}")
         print("-" * 60)
 
     except AttributeError:
-        raise ValueError("El modelo no contiene metadatos suficientes. "
-                         "Asegúrate de haber usado la API de fórmulas (sm.ols(formula=..., data=...)).")
+        raise ValueError("El modelo no contiene metadatos suficientes. Use la API de fórmulas.")
 
     # ==============================================================================
-    # 2. PREPARACIÓN DE DATOS DIAGNÓSTICOS
+    # 2. CÁLCULO DE RESIDUOS
     # ==============================================================================
     prediccion = modelo.fittedvalues
     dt_resid = np.sqrt(modelo.mse_resid)
@@ -861,27 +883,31 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     df_diag['Residuos_Std'] = residuos_std
     df_diag['Residuos'] = modelo.resid 
     
-    grupos = df_diag[col_factor].unique()
+    # Lista de grupos únicos (combinaciones)
+    grupos_unicos = np.sort(df_diag['Grupo_Comb'].unique())
     
     # ==============================================================================
     # 3. GENERACIÓN DE GRÁFICOS (LIENZO)
     # ==============================================================================
     fig, axes = plt.subplots(2, 2, figsize=figsize)
-    fig.suptitle(f'Diagnóstico ANOVA: {col_response} ~ {col_factor}', fontsize=16)
+    fig.suptitle(f'Diagnóstico de Residuos\nModelo: {col_response} ~ {nombre_factor_eje}', fontsize=14)
     
-    # A) Homogeneidad de Varianzas (Boxplot)
+    # A) Homogeneidad de Varianzas (Boxplot por Combinación de Niveles)
     sns.boxplot(
         data=df_diag, 
-        x=col_factor, 
+        x='Grupo_Comb',      # Usamos la variable combinada
         y='Residuos_Std', 
-        hue=col_factor,     
+        hue='Grupo_Comb',    # Asignamos hue para evitar warnings
         legend=False,       
-        palette="Blues", 
+        palette="viridis",   # Viridis ayuda a distinguir si hay muchos grupos
         ax=axes[0,0]
     )
     axes[0,0].axhline(y=0, color='red', linestyle='--')
     axes[0,0].set_title('Homogeneidad: Residuos por Grupo')
     axes[0,0].set_ylabel('Residuos Estandarizados')
+    axes[0,0].set_xlabel('Niveles de Factores')
+    # Rotamos etiquetas si hay muchos grupos para que se lean bien
+    axes[0,0].tick_params(axis='x', rotation=45) 
     
     # B) Normalidad Global (QQ Plot)
     sm.qqplot(df_diag['Residuos_Std'], line='45', fit=True, ax=axes[0,1])
@@ -893,6 +919,7 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     axes[1,0].stem(np.arange(len(c)), c, markerfmt=",")
     axes[1,0].set_title('Puntos Influyentes: Distancia de Cook')
     axes[1,0].set_ylabel('Distancia Cook')
+    axes[1,0].set_xlabel('Índice de Observación')
     axes[1,0].axhline(y=1, color='r', linestyle='--', alpha=0.5, label='Umbral (1.0)')
     axes[1,0].legend()
 
@@ -908,26 +935,35 @@ def diagnostico_anova(modelo, figsize=(14, 10)):
     # ==============================================================================
     resultados_tests = []
     
-    # Test de Levene (Homocedasticidad)
-    lista_residuos_grupos = [df_diag[df_diag[col_factor] == g]['Residuos'] for g in grupos]
-    stat_levene, p_levene = stats.levene(*lista_residuos_grupos, center='median')
+    # Test de Levene (Homocedasticidad) entre todos los grupos/combinaciones
+    lista_residuos_grupos = [df_diag[df_diag['Grupo_Comb'] == g]['Residuos'] for g in grupos_unicos]
     
+    # Levene requiere al menos dos grupos
+    if len(lista_residuos_grupos) > 1:
+        stat_levene, p_levene = stats.levene(*lista_residuos_grupos, center='median')
+        concl_levene = 'Varianzas Iguales (H0)' if p_levene > 0.05 else 'Varianzas Diferentes (H1)'
+    else:
+        stat_levene, p_levene = (np.nan, np.nan)
+        concl_levene = "Solo hay 1 grupo (No aplicable)"
+
     resultados_tests.append({
         'Test': 'Levene (Homocedasticidad)',
-        'Ámbito': 'Global (Entre grupos)',
-        'P-Valor': round(p_levene, 4),
-        'Conclusión': 'Varianzas Iguales (H0)' if p_levene > 0.05 else 'Varianzas Diferentes (H1)'
+        'Ámbito': 'Global (Entre combinaciones)',
+        'P-Valor': round(p_levene, 4) if not np.isnan(p_levene) else "-",
+        'Conclusión': concl_levene
     })
     
-    # Test de Shapiro-Wilk (Normalidad por grupos)
-    for g in grupos:
-        datos_grupo = df_diag[df_diag[col_factor] == g]['Residuos']
+    # Test de Shapiro-Wilk (Normalidad DENTRO de cada combinación)
+    for g in grupos_unicos:
+        datos_grupo = df_diag[df_diag['Grupo_Comb'] == g]['Residuos']
+        
+        # Shapiro requiere al menos 3 datos
         if len(datos_grupo) >= 3:
             stat_sw, p_sw = stats.shapiro(datos_grupo)
             concl = 'Normal (H0)' if p_sw > 0.05 else 'No Normal (H1)'
         else:
             p_sw = np.nan
-            concl = "N<3 (Insuficiente)"
+            concl = f"N={len(datos_grupo)} (Insuficiente)"
 
         resultados_tests.append({
             'Test': 'Shapiro-Wilk (Normalidad)',
