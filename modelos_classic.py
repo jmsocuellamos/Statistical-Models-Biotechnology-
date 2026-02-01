@@ -1181,3 +1181,213 @@ def estandarizar(df, lista_variables):
     # para cada variable "i", le añadimos el sufijo _est.
     df[f"{i}_est"] = (df[i] - df[i].mean())/df[i].std()
 
+def diagnostico_ancova(modelo, figsize=(16, 6)):
+    """
+    Realiza el diagnóstico de un modelo ANCOVA con gráficos detallados por grupo.
+    
+    Parámetros:
+    -----------
+    modelo : statsmodels result
+        Modelo ajustado.
+    figsize : tuple (ancho, alto)
+        Tamaño del lienzo. 
+        - Se aplica directamente a la Figura General.
+        - Para la Figura Detallada, se usa el 'ancho', pero la 'altura' se 
+          ajusta dinámicamente según la cantidad de grupos para evitar gráficos aplastados.
+        
+    Retorna:
+    --------
+    pd.DataFrame
+        Tabla con los resultados de los tests de hipótesis (Levene y K-S).
+    """
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    import statsmodels.api as sm
+    from scipy import stats
+    from statsmodels.stats.outliers_influence import OLSInfluence
+    import re
+
+    # ==============================================================================
+    # 1. AUTO-DETECCIÓN: SEPARAR FACTORES vs COVARIABLES
+    # ==============================================================================
+    try:
+        df = modelo.model.data.frame.copy()
+        col_response = modelo.model.endog_names
+        terminos = modelo.model.data.design_info.term_names
+        
+        vars_todas = set()
+        vars_forzadas_factor = set()
+
+        for term in terminos:
+            if term == 'Intercept': continue
+            partes = term.split(':')
+            for p in partes:
+                match = re.search(r"C\((.*?)\)", p)
+                if match:
+                    nombre_limpio = match.group(1)
+                    vars_todas.add(nombre_limpio)
+                    vars_forzadas_factor.add(nombre_limpio)
+                else:
+                    vars_todas.add(p)
+        
+        cols_factores = []
+        cols_covariables = []
+
+        print(f"Diagnóstico ANCOVA Detallado para: {col_response}")
+        print("-" * 60)
+        
+        for var in vars_todas:
+            if var not in df.columns: continue 
+            es_numerica = pd.api.types.is_numeric_dtype(df[var])
+            es_factor_explicito = var in vars_forzadas_factor
+            
+            if (not es_numerica) or es_factor_explicito:
+                cols_factores.append(var)
+            else:
+                cols_covariables.append(var)
+
+        cols_factores.sort()
+        cols_covariables.sort()
+
+        print(f"Factores (Grupos): {cols_factores}")
+        print(f"Covariables:       {cols_covariables}")
+
+        if not cols_factores:
+            df['Grupo_Comb'] = "Global"
+            nombre_factor_eje = "Global"
+        else:
+            if len(cols_factores) > 1:
+                df['Grupo_Comb'] = df[cols_factores].astype(str).agg(' & '.join, axis=1)
+                nombre_factor_eje = f"Comb: {' & '.join(cols_factores)}"
+            else:
+                df['Grupo_Comb'] = df[cols_factores[0]].astype(str)
+                nombre_factor_eje = cols_factores[0]
+
+        print(f"Agrupación visual: {nombre_factor_eje}")
+        print("-" * 60)
+
+    except AttributeError:
+        raise ValueError("El modelo no contiene metadatos suficientes.")
+
+    # ==============================================================================
+    # 2. CÁLCULO DE RESIDUOS
+    # ==============================================================================
+    prediccion = modelo.fittedvalues
+    dt_resid = np.sqrt(modelo.mse_resid)
+    residuos_std = modelo.resid / dt_resid
+    
+    indices_modelo = modelo.model.data.row_labels
+    df_diag = df.loc[indices_modelo].copy()
+    
+    df_diag['Prediccion'] = prediccion
+    df_diag['Residuos_Std'] = residuos_std
+    df_diag['Residuos'] = modelo.resid 
+    
+    grupos_unicos = np.sort(df_diag['Grupo_Comb'].unique())
+    n_grupos = len(grupos_unicos)
+
+    # ==============================================================================
+    # 3. GENERACIÓN DE GRÁFICOS
+    # ==============================================================================
+    
+    # --- FIGURA 1: DIAGNÓSTICO GLOBAL (Usa figsize tal cual) ---
+    fig1, ax1 = plt.subplots(1, 2, figsize=figsize)
+    fig1.suptitle(f'Diagnóstico General: {col_response}', fontsize=16)
+    
+    # A) Homogeneidad (Boxplots)
+    sns.boxplot(
+        data=df_diag, x='Grupo_Comb', y='Residuos_Std', hue='Grupo_Comb', 
+        legend=False, palette="viridis", order=grupos_unicos, ax=ax1[0]
+    )
+    ax1[0].axhline(y=0, color='red', linestyle='--')
+    ax1[0].set_title(f'Homogeneidad de Varianzas ({nombre_factor_eje})')
+    ax1[0].set_ylabel('Residuos Std')
+    ax1[0].tick_params(axis='x', rotation=45)
+    
+    # B) Distancia de Cook
+    infl = OLSInfluence(modelo)
+    (c, p) = infl.cooks_distance
+    ax1[1].stem(np.arange(len(c)), c, markerfmt=",")
+    ax1[1].set_title('Puntos Influyentes: Distancia de Cook')
+    ax1[1].set_ylabel('Distancia Cook')
+    ax1[1].axhline(y=1, color='r', linestyle='--', alpha=0.5)
+    
+    plt.tight_layout()
+    plt.show()
+
+    # --- FIGURA 2: DETALLE POR GRUPO (Dinámica) ---
+    # Usamos el ANCHO de figsize, pero calculamos la ALTO necesaria
+    ancho_fig = figsize[0]
+    alto_fila = 4  # Altura fija por fila para legibilidad
+    alto_total = alto_fila * n_grupos
+    
+    fig2, ax2 = plt.subplots(nrows=n_grupos, ncols=2, figsize=(ancho_fig, alto_total), squeeze=False)
+    fig2.suptitle(f'Diagnóstico Detallado por Grupo: {nombre_factor_eje}', fontsize=16, y=1.005)
+
+    for i, grupo in enumerate(grupos_unicos):
+        subset = df_diag[df_diag['Grupo_Comb'] == grupo]
+        
+        # Columna 0: Q-Q Plot
+        sm.qqplot(subset['Residuos_Std'], line='45', fit=True, ax=ax2[i, 0])
+        ax2[i, 0].set_title(f'Normalidad (Q-Q): {grupo}', fontsize=11, fontweight='bold')
+        ax2[i, 0].set_ylabel('Cuartiles Muestrales')
+        
+        # Columna 1: Residuos vs Predicción
+        sns.scatterplot(x=subset['Prediccion'], y=subset['Residuos_Std'], ax=ax2[i, 1], color='steelblue', s=60, alpha=0.8)
+        ax2[i, 1].axhline(y=0, color='red', linestyle='--')
+        ax2[i, 1].set_title(f'Residuos vs Predicción: {grupo}', fontsize=11, fontweight='bold')
+        ax2[i, 1].set_ylabel('Residuos Std')
+        ax2[i, 1].set_xlabel('Valor Predicho')
+        ax2[i, 1].grid(True, alpha=0.3)
+
+    plt.tight_layout()
+    plt.show()
+
+    # ==============================================================================
+    # 4. TESTS ESTADÍSTICOS (K-S y Levene)
+    # ==============================================================================
+    resultados_tests = []
+    
+    # Levene Global
+    lista_residuos_grupos = [df_diag[df_diag['Grupo_Comb'] == g]['Residuos'] for g in grupos_unicos]
+    
+    if len(lista_residuos_grupos) > 1:
+        stat_levene, p_levene = stats.levene(*lista_residuos_grupos, center='median')
+        concl_levene = 'Varianzas Iguales (H0)' if p_levene > 0.05 else 'Varianzas Diferentes (H1)'
+    else:
+        stat_levene, p_levene = (np.nan, np.nan)
+        concl_levene = "N/A (1 solo grupo)"
+
+    resultados_tests.append({
+        'Test': 'Levene (Homocedasticidad)',
+        'Ámbito': f'Global: {nombre_factor_eje}',
+        'P-Valor': round(p_levene, 4) if not np.isnan(p_levene) else "-",
+        'Conclusión': concl_levene
+    })
+    
+    # Kolmogorov-Smirnov por Grupo
+    for g in grupos_unicos:
+        datos_grupo = df_diag[df_diag['Grupo_Comb'] == g]['Residuos']
+        
+        if len(datos_grupo) >= 3:
+            media_g = np.mean(datos_grupo)
+            std_g = np.std(datos_grupo, ddof=1)
+            # K-S contra normal ajustada
+            stat_ks, p_ks = stats.kstest(datos_grupo, 'norm', args=(media_g, std_g))
+            concl = 'Normal (H0)' if p_ks > 0.05 else 'No Normal (H1)'
+        else:
+            p_ks = np.nan
+            concl = f"N={len(datos_grupo)} (Insuficiente)"
+
+        resultados_tests.append({
+            'Test': 'Kolmogorov-Smirnov',
+            'Ámbito': f'Grupo: {g}',
+            'P-Valor': round(p_ks, 4) if not np.isnan(p_ks) else "-",
+            'Conclusión': concl
+        })
+        
+    df_resultados = pd.DataFrame(resultados_tests)
+    
+    return df_resultados
