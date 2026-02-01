@@ -1124,3 +1124,43 @@ def prediccion_anova(modelo, func=None, figsize=(12, 5)):
     plt.show()
 
     return df_resultado
+
+
+def ancova_selection(mod, metrica, datos):
+
+    """
+    Evalúa la métrica considerada para un conjunto de modelos.
+
+    Parameters
+    ----------
+    mod: lista
+    metrica: str
+        Métrica utilizada para seleccionar el modelo. Debe ser una de las
+        siguientes opciones: 'aic', 'bic'.
+    datos: pdDataFrame
+        Conjunto de datos sobre los que evaluar los modelos
+
+    Returns
+    -------
+    modelo: list
+        modelo con el mejor valor de la métrica.
+    """
+
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+    from statsmodels.stats.anova import anova_lm
+
+    valores = []
+
+    if metrica == 'aic':
+      for i in range(len(mod)):
+        ajuste = smf.ols(mod[i], data = datos).fit()
+        valores.append(round(getattr(ajuste, metrica),4))
+        pos = valores.index(min(valores))
+    if metrica == 'bic':
+      for i in range(len(mod)):
+        ajuste = smf.ols(mod[i], data = datos).fit()
+        valores.append(round(getattr(ajuste, metrica),4))
+        pos = valores.index(min(valores))
+
+    return mod[pos]
