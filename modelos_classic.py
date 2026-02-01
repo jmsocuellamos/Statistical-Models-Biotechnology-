@@ -1164,3 +1164,20 @@ def ancova_selection(mod, metrica, datos):
         pos = valores.index(min(valores))
 
     return mod[pos]
+
+
+def estandarizar(df, lista_variables):
+  """
+  Estandariza las variables en el dataframe df, detalladas en la lista lista_variables.
+
+  Parámetros:
+    - df: base de datos
+    - lista_variables: lista con los nombres de las variables numéricas a estandarizar
+  Devuelve el mismo dataframe con una columna adicional por cada una de las contenidas en
+  la lista, identificadas con el sufijo '_est'.
+  """
+  # Recorremos la lista con las variables numéricas
+  for i in lista_variables:
+    # para cada variable "i", le añadimos el sufijo _est.
+    df[f"{i}_est"] = (df[i] - df[i].mean())/df[i].std()
+
