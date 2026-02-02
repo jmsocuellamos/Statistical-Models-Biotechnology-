@@ -1437,3 +1437,80 @@ def gof_test(fit):
         print("   Existe una discrepancia significativa con los datos observados.")
         
     return pvalor
+
+def selection_glm(formulas, datos, metrica='aic', familia=sm.families.Binomial()):
+    """
+    Evalúa un conjunto de fórmulas para modelos GLM y selecciona el mejor según AIC o BIC.
+    
+    Parámetros:
+    -----------
+    formulas : list of str
+        Lista de strings con las fórmulas a evaluar (ej: ['y ~ x1', 'y ~ x1 + x2']).
+    datos : pd.DataFrame
+        Conjunto de datos.
+    metrica : str
+        'aic' o 'bic'.
+    familia : statsmodels.families
+        Familia del GLM (por defecto Binomial, útil para regresión logística).
+        
+    Retorna:
+    --------
+    str
+        La fórmula del mejor modelo.
+    """
+    import statsmodels.api as sm
+    import statsmodels.formula.api as smf
+
+    resultados = []
+    nombre_metrica = metrica.upper()
+    
+    print(f"--- Selección de Modelos GLM ({nombre_metrica}) ---")
+    print(f"Total de modelos a evaluar: {len(formulas)}")
+    
+    for i, formula in enumerate(formulas):
+        try:
+            # Ajustamos el modelo
+            modelo = smf.glm(formula=formula, data=datos, family=familia).fit()
+            
+            # Obtenemos el valor de la métrica
+            # Nota: En statsmodels GLM, el BIC basado en log-likelihood suele llamarse 'bic_llf'
+            if metrica.lower() == 'bic':
+                valor = modelo.bic_llf
+            else:
+                valor = modelo.aic
+            
+            resultados.append({
+                'ID': i,
+                'Formula': formula,
+                nombre_metrica: valor,
+                'Gl_Resid': modelo.df_resid
+            })
+            
+        except Exception as e:
+            print(f"⚠️ Error al ajustar modelo {formula}: {e}")
+
+    # Convertimos a DataFrame para ordenar y visualizar
+    df_res = pd.DataFrame(resultados)
+    
+    if df_res.empty:
+        return None
+
+    # Ordenamos de menor a mayor (menor AIC/BIC es mejor)
+    df_res = df_res.sort_values(by=nombre_metrica, ascending=True).reset_index(drop=True)
+    
+    # Calculamos el Delta (diferencia respecto al mejor)
+    mejor_valor = df_res.iloc[0][nombre_metrica]
+    df_res['Delta'] = df_res[nombre_metrica] - mejor_valor
+    
+    # Mostramos la tabla
+    print("-" * 80)
+    # Formato de impresión limpio
+    print(df_res[['ID', 'Formula', nombre_metrica, 'Delta']].to_string(index=False))
+    print("-" * 80)
+    
+    mejor_formula = df_res.iloc[0]['Formula']
+    print(f"✅ Mejor Modelo: {mejor_formula}")
+    print(f"   {nombre_metrica}: {mejor_valor:.4f}")
+    
+    return mejor_formula
+    
