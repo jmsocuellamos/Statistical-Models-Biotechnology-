@@ -1391,3 +1391,49 @@ def diagnostico_ancova(modelo, figsize=(16, 6)):
     df_resultados = pd.DataFrame(resultados_tests)
     
     return df_resultados
+
+def gof_test(fit):
+    '''
+    Evalúa el test Chi-cuadrado de la deviance (Bondad de ajuste).
+    
+    Hipótesis:
+    H0: El modelo ajusta bien a los datos.
+    H1: El modelo no ajusta bien a los datos.
+    
+    Parámetros:
+    -----------
+    fit : statsmodels result
+        Modelo GLM ajustado (binomial/poisson).
+        
+    Retorna:
+    --------
+    float
+        El p-valor del test.
+    '''
+    import scipy.stats as stats
+
+    # 1. Extraemos la Deviance y los Grados de Libertad de los residuos
+    deviance = fit.deviance
+    df_resid = fit.df_resid
+    
+    # 2. Cálculo del P-Valor
+    # Calculamos la probabilidad de encontrar una deviance mayor a la observada.
+    pvalor = stats.chi2.sf(deviance, df_resid)
+    
+    # 3. Presentación de resultados
+    print("-" * 40)
+    print("Test de Bondad de Ajuste (Deviance)")
+    print("-" * 40)
+    print(f"Deviance del Modelo: {deviance:.4f}")
+    print(f"Grados de Libertad:  {df_resid}")
+    print(f"P-Valor:             {pvalor:.4f}")
+    print("-" * 40)
+    
+    if pvalor > 0.05:
+        print("✅ CONCLUSIÓN: El modelo AJUSTA BIEN (No rechazamos H0).")
+        print("   No hay diferencia significativa entre el modelo ajustado y los datos.")
+    else:
+        print("⚠️ CONCLUSIÓN: El modelo NO AJUSTA bien (Rechazamos H0).")
+        print("   Existe una discrepancia significativa con los datos observados.")
+        
+    return pvalor
