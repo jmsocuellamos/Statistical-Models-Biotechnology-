@@ -1513,4 +1513,66 @@ def selection_glm(formulas, datos, metrica='aic', familia=sm.families.Binomial()
     print(f"   {nombre_metrica}: {mejor_valor:.4f}")
     
     return mejor_formula
+
+def compara_deviance(fit_reducido, fit_completo):
+    '''
+    Realiza el Test de la Deviance (Likelihood Ratio Test) para comparar dos modelos anidados.
+    
+    Hipótesis:
+    H0: El modelo reducido es suficiente (la complejidad extra no mejora significativamente).
+    H1: El modelo completo es significativamente mejor.
+    
+    Parámetros:
+    -----------
+    fit_reducido : statsmodels result
+        Modelo con menos parámetros (más simple).
+    fit_completo : statsmodels result
+        Modelo con más parámetros (más complejo).
+        
+    Retorna:
+    --------
+    float
+        P-valor del test.
+    '''
+    import scipy.stats as stats
+
+    # 1. Calcular diferencias
+    # Nota: La deviance del modelo reducido siempre es mayor (peor ajuste) que la del completo.
+    # Si el usuario los introduce al revés, corregimos automáticamente.
+    
+    dev_diff = fit_reducido.deviance - fit_completo.deviance
+    df_diff = fit_reducido.df_resid - fit_completo.df_resid
+    
+    # Si el usuario pasó los modelos en orden inverso (primero el complejo), invertimos los valores
+    if df_diff < 0:
+        dev_diff = -dev_diff
+        df_diff = -df_diff
+    
+    # Validación simple
+    if df_diff == 0:
+        print("⚠️ Error: Los modelos tienen los mismos grados de libertad (no están anidados o son iguales).")
+        return np.nan
+
+    # 2. Cálculo del P-Valor
+    pvalor = stats.chi2.sf(dev_diff, df_diff)
+    
+    # 3. Reporte de Resultados
+    print("-" * 60)
+    print("Test de la Deviance (Comparación de Modelos Anidados)")
+    print("-" * 60)
+    print(f"Diferencia de Deviance (Estadístico): {dev_diff:.4f}")
+    print(f"Diferencia de Grados de Libertad:     {df_diff:.0f}")
+    print(f"P-Valor:                              {pvalor:.4f}")
+    print("-" * 60)
+    
+    if pvalor < 0.05:
+        print("✅ Resultado Significativo (Rechazamos H0)")
+        print("   El modelo COMPLETO mejora significativamente el ajuste.")
+        print("   -> Recomendación: Quedarse con el modelo MÁS COMPLEJO.")
+    else:
+        print("❌ Resultado No Significativo (No rechazamos H0)")
+        print("   El modelo completo no aporta una mejora sustancial.")
+        print("   -> Recomendación: Quedarse con el modelo REDUCIDO (Parsimonia).")
+        
+    return pvalor
     
