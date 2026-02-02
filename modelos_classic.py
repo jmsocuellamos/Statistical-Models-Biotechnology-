@@ -1575,4 +1575,120 @@ def compara_deviance(fit_reducido, fit_completo):
         print("   -> Recomendación: Quedarse con el modelo REDUCIDO (Parsimonia).")
         
     return pvalor
+
+def evaluacion_logistica(modelo, categorias_lista, categoria_uno):
+    """
+    Genera una evaluación visual completa para un modelo logístico en un Grid 2x2.
+    
+    Salida Gráfica:
+    - Arriba Izq: Matriz de Confusión (Blues, %).
+    - Arriba Der: Informe de Clasificación (Blues, Heatmap).
+    - Abajo Izq: Curva ROC.
+    - Abajo Der: Vacio (o texto de resumen).
+    
+    Parámetros:
+    -----------
+    modelo : statsmodels result
+        Modelo GLM ajustado.
+    categorias_lista : list
+        Lista con los nombres de las categorías [Clase 0, Clase 1].
+    categoria_uno : str
+        Nombre de la categoría considerada como 'Positiva' (Valor 1).
+    """
+    
+    import pandas as pd
+    import numpy as np
+    import matplotlib.pyplot as plt
+    import seaborn as sns
+    from sklearn.metrics import (confusion_matrix, ConfusionMatrixDisplay, 
+                             classification_report, roc_curve, roc_auc_score, 
+                             accuracy_score)
+
+    # 1. PREPARACIÓN DE DATOS
+    # -----------------------
+    y_real = modelo.model.endog
+    prob_pred = modelo.predict()
+    clasif_pred = (prob_pred > 0.5).astype(int)
+    
+    if categorias_lista[1] != categoria_uno:
+        print(f"⚠️ Aviso: '{categoria_uno}' debe estar en la posición 1 de la lista.")
+
+    # 2. CONFIGURACIÓN DEL LIENZO (2x2)
+    # ---------------------------------
+    # Aumentamos figsize para que quepa bien el 2x2
+    fig, ax = plt.subplots(2, 2, figsize=(12, 12))
+    
+    # Aplanamos el array de ejes para acceder fácil (0, 1, 2, 3)
+    ax = ax.flatten() 
+    
+    plt.suptitle(f"Evaluación del Modelo: Clase Positiva = {categoria_uno}", fontsize=18, fontweight='bold', y=0.95)
+    
+    # Estilos de fuente
+    title_size = 14
+    label_size = 12
+    tick_size = 11
+    
+    # --- GRÁFICO 1: MATRIZ DE CONFUSIÓN (Arriba Izquierda) ---
+    cm = confusion_matrix(y_real, clasif_pred, normalize='true')
+    disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=categorias_lista)
+    
+    # Plot en ax[0]
+    disp.plot(cmap='Blues', ax=ax[0], values_format='.1%')
+    
+    # Ajustes estéticos manuales
+    ax[0].set_title('1. Matriz de Confusión (Norm. filas)', fontsize=title_size)
+    ax[0].set_xlabel('Etiqueta Predicha', fontsize=label_size)
+    ax[0].set_ylabel('Etiqueta Real', fontsize=label_size)
+    ax[0].tick_params(labelsize=tick_size)
+    
+    # Aumentar tamaño de los textos dentro de la matriz
+    for text in disp.text_.ravel():
+        text.set_fontsize(14)
+    
+    # --- GRÁFICO 2: INFORME DE CLASIFICACIÓN (Arriba Derecha) ---
+    report_dict = classification_report(y_real, clasif_pred, target_names=categorias_lista, output_dict=True)
+    df_report = pd.DataFrame(report_dict).transpose()
+    
+    # Limpieza (sin support ni accuracy)
+    df_heatmap = df_report.drop(columns=['support'], errors='ignore')
+    if 'accuracy' in df_heatmap.index:
+        df_heatmap = df_heatmap.drop(index=['accuracy'])
+    
+    # Plot en ax[1] con annot_kws para tamaño de letra
+    sns.heatmap(df_heatmap, annot=True, cmap='Blues', vmin=0, vmax=1, 
+                fmt='.3f', ax=ax[1], cbar=False, annot_kws={"size": 14})
+    
+    ax[1].set_title('2. Informe de Clasificación (Métricas)', fontsize=title_size)
+    ax[1].tick_params(axis='y', rotation=0, labelsize=tick_size)
+    ax[1].tick_params(axis='x', labelsize=tick_size)
+
+    # --- GRÁFICO 3: CURVA ROC (Abajo Izquierda) ---
+    auc_valor = roc_auc_score(y_real, prob_pred)
+    fpr, tpr, thresholds = roc_curve(y_real, prob_pred)
+    
+    # Plot en ax[2]
+    sns.lineplot(x=fpr, y=tpr, ax=ax[2], color='darkorange', lw=3, label=f'AUC = {auc_valor:.3f}')
+    ax[2].plot([0, 1], [0, 1], color='navy', lw=2, linestyle='--')
+    
+    ax[2].set_title('3. Curva ROC', fontsize=title_size)
+    ax[2].set_xlabel('1 - Especificidad (FPR)', fontsize=label_size)
+    ax[2].set_ylabel('Sensibilidad (TPR)', fontsize=label_size)
+    ax[2].tick_params(labelsize=tick_size)
+    ax[2].legend(loc="lower right", fontsize=12)
+    ax[2].grid(True, alpha=0.3)
+    
+    # --- GRÁFICO 4: VACÍO (Abajo Derecha) ---
+    # Como solo tenemos 3 gráficos, apagamos el 4º cuadrante para que quede limpio
+    ax[3].axis('off')
+    
+    # Opcional: Poner el Accuracy global en el hueco vacío
+    acc_val = accuracy_score(y_real, clasif_pred)
+    ax[3].text(0.5, 0.5, f"Exactitud Global\n(Accuracy)\n\n{acc_val:.4f}", 
+               horizontalalignment='center', verticalalignment='center', 
+               fontsize=20, color='navy', weight='bold')
+
+    plt.tight_layout(rect=[0, 0.03, 1, 0.95]) # Ajuste para que el suptitle no choque
+    plt.show()
+
+
     
