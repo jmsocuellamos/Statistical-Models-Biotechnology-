@@ -481,25 +481,25 @@ def diagnostico_modelo_regresion(modelo, alpha=0.05, figsize=(15, 10)):
     
     # Comentario Normalidad
     if cumple_sw:
-        print(f"[OK] Normalidad: Los residuos parecen seguir una distribución normal (p={p_val_sw:.4f} > {alpha}).")
+        print(f"✅ Normalidad: Los residuos parecen seguir una distribución normal (p={p_val_sw:.4f} > {alpha}).")
     else:
-        print(f"[X] Normalidad: Se rechaza la hipótesis de normalidad (p={p_val_sw:.4f} < {alpha}).")
+        print(f"❌ Normalidad: Se rechaza la hipótesis de normalidad (p={p_val_sw:.4f} < {alpha}).")
     
     # Comentario Homocedasticidad
     if cumple_bp:
-        print(f"[OK] Homocedasticidad: La varianza de los errores es constante (p={p_val_bp:.4f} > {alpha}).")
+        print(f"✅ Homocedasticidad: La varianza de los errores es constante (p={p_val_bp:.4f} > {alpha}).")
     else:
-        print(f"[X] Homocedasticidad: Existen indicios de heterocedasticidad (varianza no constante).")
+        print(f"❌ Homocedasticidad: Existen indicios de heterocedasticidad (varianza no constante).")
         
     # Comentario Independencia
     if cumple_dw:
-        print(f"[OK] Independencia: No parece haber autocorrelación severa (DW={stat_dw:.2f} está entre 1.5 y 2.5).")
+        print(f"✅ Independencia: No parece haber autocorrelación severa (DW={stat_dw:.2f} está entre 1.5 y 2.5).")
     else:
         if stat_dw < 1.5:
             tipo = "positiva"
         else:
             tipo = "negativa"
-        print(f"[X] Independencia: Posible autocorrelación {tipo} de los residuos (DW={stat_dw:.2f}).")
+        print(f"❌ Independencia: Posible autocorrelación {tipo} de los residuos (DW={stat_dw:.2f}).")
         
     print("="*50 + "\n")
 
